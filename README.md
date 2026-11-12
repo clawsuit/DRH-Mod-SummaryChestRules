@@ -4,36 +4,36 @@ Keeps or discards the four chests of the victory summary according to their rari
 KEEP/DROP four times.
 
 <!-- drh:show -->
-**No usa tecla.** Se configura desde el hub (`F1`) → **Cofres del resumen** → **OPCIONES**.
-El hub arranca en inglés y el botón **EN/ES** traduce también estas opciones.
+**No hotkey.** Configure it from the hub (`F1`) → **Summary Chests** → **OPTIONS**.
+The hub starts in English, and its **EN/ES** button also translates these options.
 
-- **Activo**: por defecto está apagado; actívalo para que procese los cofres.
-- **Guardar RARO / LEGENDARIO / POCO COMÚN / COMÚN**: cada rareza se guarda o se descarta.
-- **Guardar item boxes**: las cajas de objetos pequeñas y royal.
-- **Si no hay hueco**: pausar y avisar, o descartar.
+- **Enabled**: off by default; turn it on so the mod processes the chests.
+- **Keep RARE / LEGENDARY / UNCOMMON / COMMON**: each rarity is either kept or discarded.
+- **Keep Item boxes**: small and royal item boxes.
+- **When storage is full**: pause and warn, or discard.
 
-Al terminar la partida, el mod espera a que el resumen esté listo y va resolviendo los cofres uno a
-uno con las mismas llamadas que los botones KEEP y DROP. No abre los cofres: solo decide si entran al
-inventario o se descartan. El contenido lo sigue decidiendo el servidor.
+When a run ends, the mod waits for the summary to be ready and resolves the chests one by one with the
+same calls as the KEEP and DROP buttons. It does not open the chests: it only decides whether they go
+to the inventory or are discarded. The server still decides their contents.
 
-Si el inventario de cofres está lleno, la regla **Si no hay hueco** decide. Un cambio de opciones
-reanuda el procesamiento si estaba pausado.
+If chest storage is full, the **When storage is full** rule decides. Changing the options resumes
+processing if it was paused.
 <!-- /drh:show -->
 
-## Ojo con otras automatizaciones
+## Other automation
 
-Si otro mod también recoge los cofres del resumen, no uses las dos automatizaciones a la vez sobre la
-misma partida: deja una apagada mientras la otra esté activa.
+If another mod also collects the summary chests, do not run both automations on the same run: leave
+one of them off while the other is active.
 
-## Dependencia
+## Dependency
 
-Necesita **Mod Hub API** (`mod_hub_api`). No necesita el panel del hub para funcionar, pero sin él no
-hay forma de cambiar las opciones desde el juego (quedan las de `settings.json`).
+Requires **Mod Hub API** (`mod_hub_api`). It works without the hub panel, but without the hub there is
+no in-game way to change the options (the values in `settings.json` are used).
 
-## Datos
+## Data
 
-`settings.json` y `last.log` viven en `data/summary_chest_rules/`.
+`settings.json` and `last.log` live in `data/summary_chest_rules/`.
 
-## Licencia
+## License
 
-MIT. Ver `LICENSE`.
+MIT. See `LICENSE`.
