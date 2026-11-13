@@ -2,29 +2,31 @@ package mods.summary_chest_rules;
 
 import distributedObjects.DistributedDungeonSummary;
 import facade.DBFacade;
+import haxe.Json;
 import mods.api.Context;
 import mods.api.Mod;
-import mods.mod_hub_api.Hub;
-import mods.mod_hub_api.HubChoice;
-import mods.mod_hub_api.HubEntry;
-import mods.mod_hub_api.HubSetting;
+import mods.api.settings.Flag;
+import mods.api.settings.Slider;
 import openfl.events.Event;
+import openfl.system.Capabilities;
+import sys.FileSystem;
+import sys.io.File;
 
 /**
  * At the victory summary, keeps or discards the four reward chests according to their rarity.
  *
  * It uses the same server calls as the KEEP and DROP buttons; it only does the clicking.
+ *
+ * Configure it from Ajustes → ADVANCED → Summary Chest Rules.
  */
 @:privateAccess
 class Main extends Mod {
 	/** How long a KEEP may wait for the account answer before the summary is left alone. */
-	static inline final KEEP_TIMEOUT = 10000.0;
+	static inline final KEEP_TIMEOUT_DEFAULT = 10000.0;
 
 	var ctx:Context;
 
 	var facade:DBFacade;
-
-	var settings:Settings;
 
 	var summary:DistributedDungeonSummary;
 
@@ -41,14 +43,40 @@ class Main extends Mod {
 	/** One diagnostic line per second while a summary exists, to see what gate stops the run. */
 	var traceAt:Float = 0;
 
+	// API 1.3 settings (shown in Ajustes → ADVANCED → Summary Chest Rules)
+	// El mod está siempre activo; no hay switch de Enabled.
+	var flagKeepRare:Flag;
+	var flagKeepLegendary:Flag;
+	var flagKeepItemBox:Flag;
+	var flagKeepUncommon:Flag;
+	var flagKeepCommon:Flag;
+	var sliderTimeout:Slider;
+
 	override public function init(context:Context):Void {
 		ctx = context;
 		try {
 			Log.start(ctx.data);
 		} catch (error:Dynamic) {}
-		settings = new Settings(ctx.data, ctx.log);
-		register();
-		Hub.onLanguageChanged(languageChanged);
+
+		// Declarar opciones en el menú del juego (Ajustes → ADVANCED)
+		flagKeepRare = ctx.settings.flag("keepRare", "Keep RARE", "Rare chests are kept; otherwise discarded.", true);
+		flagKeepLegendary = ctx.settings.flag("keepLegendary", "Keep LEGENDARY", "Legendary chests are kept; otherwise discarded.", true);
+		flagKeepItemBox = ctx.settings.flag("keepItemBox", "Keep item boxes", "Small and royal item boxes are kept.", true);
+		flagKeepUncommon = ctx.settings.flag("keepUncommon", "Keep UNCOMMON", "Uncommon chests are kept; otherwise discarded.", true);
+		flagKeepCommon = ctx.settings.flag("keepCommon", "Keep COMMON", "Common chests are kept; otherwise discarded.", true);
+		sliderTimeout = ctx.settings.slider("keepTimeout", "Keep timeout", "Seconds to wait for the server to confirm KEEP.", 5, 30, 1, KEEP_TIMEOUT_DEFAULT / 1000, 0);
+
+		// Volcar valores previos del settings.json propio (si lo había de la versión con hub)
+		loadLegacySettings();
+
+		// Reaccionar a cambios: reanudar si estaba pausado (storage full, timeout)
+		flagKeepRare.onChange(function() { resume(); });
+		flagKeepLegendary.onChange(function() { resume(); });
+		flagKeepItemBox.onChange(function() { resume(); });
+		flagKeepUncommon.onChange(function() { resume(); });
+		flagKeepCommon.onChange(function() { resume(); });
+		sliderTimeout.onChange(function() { resume(); });
+
 		ctx.core.onObjectReady(function(object) {
 			if (Std.isOfType(object, DistributedDungeonSummary)) {
 				summary = cast object;
@@ -58,7 +86,6 @@ class Main extends Mod {
 				keepSince = 0;
 				keepCount = 0;
 				Log.write("summary ready");
-				Hub.notifyChanged();
 			}
 		});
 		ctx.core.onObjectGone(function(object) {
@@ -67,11 +94,10 @@ class Main extends Mod {
 				paused = false;
 				pauseReason = "";
 				keepSince = 0;
-				Hub.notifyChanged();
 			}
 		});
 		ctx.overlay.addEventListener(Event.ENTER_FRAME, tick);
-		Log.write("init enabled=" + settings.enabled);
+		Log.write("init always-on");
 	}
 
 	override public function ready(context:Context):Void {
@@ -79,154 +105,35 @@ class Main extends Mod {
 	}
 
 	override public function dispose():Void {
-		Hub.unregister("summary_chest_rules");
-		Hub.offLanguageChanged(languageChanged);
 		if (ctx != null && ctx.overlay != null)
 			ctx.overlay.removeEventListener(Event.ENTER_FRAME, tick);
 		summary = null;
 	}
 
-	function register():Void {
-		var list:Array<HubSetting> = [
-			boolSetting("enabled", tr("Enabled", "Activo"), tr("Processes the chests at the end of a run.", "Procesa los cofres al terminar la partida."), function() {
-				return settings.enabled;
-			}, function(value:Bool) {
-				settings.enabled = value;
-				settings.save();
-				resume();
-			}),
-			boolSetting("keepRare", tr("Keep RARE", "Guardar RARO"), tr("Rare chests are kept; otherwise discarded.", "Los cofres raros se guardan; si no, se descartan."), function() {
-				return settings.keepRare;
-			}, function(value:Bool) {
-				settings.keepRare = value;
-				settings.save();
-				resume();
-			}),
-			boolSetting("keepLegendary", tr("Keep LEGENDARY", "Guardar LEGENDARIO"), tr("Legendary chests are kept; otherwise discarded.", "Los legendarios se guardan; si no, se descartan."), function() {
-				return settings.keepLegendary;
-			}, function(value:Bool) {
-				settings.keepLegendary = value;
-				settings.save();
-				resume();
-			}),
-			boolSetting("keepItemBox", tr("Keep item boxes", "Guardar item boxes"), tr("Small and royal item boxes are kept.", "Las cajas de objetos (small y royal) se guardan."), function() {
-				return settings.keepItemBox;
-			}, function(value:Bool) {
-				settings.keepItemBox = value;
-				settings.save();
-				resume();
-			}),
-			boolSetting("keepUncommon", tr("Keep UNCOMMON", "Guardar POCO COMÚN"), tr("Uncommon chests are kept; otherwise discarded.", "Los poco comunes se guardan; si no, se descartan."), function() {
-				return settings.keepUncommon;
-			}, function(value:Bool) {
-				settings.keepUncommon = value;
-				settings.save();
-				resume();
-			}),
-			boolSetting("keepCommon", tr("Keep COMMON", "Guardar COMÚN"), tr("Common chests are kept; otherwise discarded.", "Los comunes se guardan; si no, se descartan."), function() {
-				return settings.keepCommon;
-			}, function(value:Bool) {
-				settings.keepCommon = value;
-				settings.save();
-				resume();
-			}),
-			choiceSetting("whenFull", tr("When storage is full", "Si no hay hueco"), tr("What to do when a kept chest does not fit.", "Qué hacer si un cofre no cabe."), function() {
-				return settings.whenFull;
-			}, function(value:String) {
-				settings.whenFull = value == "drop" ? "drop" : "pause";
-				settings.save();
-				resume();
-			}, [
-				{id: "pause", label: tr("Pause", "Pausar")},
-				{id: "drop", label: tr("Discard", "Descartar")}
-			])
-		];
-		var entry:HubEntry = {
-			id: "summary_chest_rules",
-			name: tr("Summary Chests", "Cofres del resumen"),
-			description: tr("Keeps or discards victory chests by rarity.", "Guarda o descarta los cofres de la victoria."),
-			category: "Inventario",
-			order: 20,
-			status: function():String {
-				return statusText();
-			},
-			settings: list
-		};
-		if (!Hub.register(entry))
-			Log.write("could not register in Mod Hub");
-		else
-			Log.write("register language=" + Hub.language + " name=" + entry.name);
-	}
-
-	function boolSetting(id:String, label:String, description:String, get:Void->Bool, apply:Bool->Void):HubSetting {
-		return {
-			id: id,
-			label: label,
-			description: description,
-			type: "bool",
-			get: function():Dynamic {
-				return get();
-			},
-			set: function(value:Dynamic):Void {
-				Log.write("setting " + id + "=" + Std.string(value));
-				apply(value == true);
+	function loadLegacySettings():Void {
+		var path = ctx.data + "/settings.json";
+		try {
+			if (FileSystem.exists(path)) {
+				var content = File.getContent(path);
+				if (content.charCodeAt(0) == 0xFEFF)
+					content = content.substr(1);
+				var data:Dynamic = Json.parse(content);
+				if (data.keepRare != null)
+					flagKeepRare.value = data.keepRare == true;
+				if (data.keepLegendary != null)
+					flagKeepLegendary.value = data.keepLegendary == true;
+				if (data.keepItemBox != null)
+					flagKeepItemBox.value = data.keepItemBox == true;
+				if (data.keepUncommon != null)
+					flagKeepUncommon.value = data.keepUncommon == true;
+				if (data.keepCommon != null)
+					flagKeepCommon.value = data.keepCommon == true;
+				if (data.keepTimeout != null)
+					sliderTimeout.value = Std.parseFloat(Std.string(data.keepTimeout));
 			}
-		};
-	}
-
-	function choiceSetting(id:String, label:String, description:String, get:Void->String, apply:String->Void,
-			choices:Array<HubChoice>):HubSetting {
-		return {
-			id: id,
-			label: label,
-			description: description,
-			type: "choice",
-			get: function():Dynamic {
-				return get();
-			},
-			set: function(value:Dynamic):Void {
-				Log.write("setting " + id + "=" + Std.string(value));
-				apply(Std.string(value));
-			},
-			choices: choices
-		};
-	}
-
-	function statusText():String {
-		if (!settings.enabled)
-			return tr("Disabled", "Desactivado");
-		if (paused)
-			return tr("Paused: ", "Pausado: ") + pauseText(pauseReason);
-		if (summary != null)
-			return tr("Processing the summary", "Procesando el resumen");
-		return tr("Waiting for a summary", "Esperando un resumen");
-	}
-
-	function pauseText(key:String):String {
-		if (key == "keep_timeout")
-			return tr("the server did not confirm KEEP", "el servidor no confirmó el KEEP");
-		if (key == "missing_chest")
-			return tr("the pending chest was not found", "no encuentro el cofre pendiente");
-		if (key == "missing_data")
-			return tr("the chest is not in the game data", "el cofre no está en los datos del juego");
-		if (key == "storage_full")
-			return tr("chest storage is full", "inventario de cofres lleno");
-		if (key == "keep_failed")
-			return tr("KEEP failed", "KEEP falló");
-		if (key == "drop_failed")
-			return tr("DROP failed", "DROP falló");
-		if (key == "popup_failed")
-			return tr("the chest popup could not be closed", "no pude cerrar el popup del cofre");
-		return key;
-	}
-
-	function tr(en:String, es:String):String {
-		return Hub.language == "es" ? es : en;
-	}
-
-	function languageChanged():Void {
-		Log.write("language=" + Hub.language);
-		register();
+		} catch (error:Dynamic) {
+			Log.write("could not read legacy settings.json: " + Std.string(error));
+		}
 	}
 
 	function tick(_:Event):Void {
@@ -237,7 +144,7 @@ class Main extends Mod {
 			traceAt = now;
 			trace(now);
 		}
-		if (facade == null || !settings.enabled || paused)
+		if (facade == null || paused)
 			return;
 		if (!ctx.core.alive)
 			return;
@@ -260,10 +167,11 @@ class Main extends Mod {
 		}
 
 		var count = summary.mItemCount;
+		var keepTimeoutMs = sliderTimeout.value * 1000;
 		if (keepSince > 0) {
 			if (count != keepCount) {
 				keepSince = 0;
-			} else if (now - keepSince > KEEP_TIMEOUT) {
+			} else if (now - keepSince > keepTimeoutMs) {
 				pause("keep_timeout");
 				return;
 			} else {
@@ -312,14 +220,6 @@ class Main extends Mod {
 		var rarity = Std.string(Reflect.field(gmChest, "Rarity"));
 		var keep = keepFor(rarity);
 
-		if (keep && !facade.dbAccountInfo.inventoryInfo.hasRoomForChest(gmId)) {
-			if (settings.whenFull == "drop") {
-				drop(slot, gmChest, rarity, now);
-			} else {
-				pause("storage_full");
-			}
-			return;
-		}
 		if (keep)
 			keepChest(slot, gmChest, rarity, count, now);
 		else
@@ -340,7 +240,7 @@ class Main extends Mod {
 				first = "row error=" + Std.string(error);
 			}
 		}
-		Log.write("tick enabled=" + settings.enabled + " paused=" + paused + " alive=" + ctx.core.alive + " leave=" + summary.mLeaving
+		Log.write("tick always-on paused=" + paused + " alive=" + ctx.core.alive + " leave=" + summary.mLeaving
 			+ " reveal=" + summary.mRevealState + " header=" + (summary.mTownHeader != null) + " items=" + summary.mItemCount
 			+ " dialogs=" + dialogsText() + " keep=" + keepSince + " cooldown=" + Std.int(cooldown - now) + " " + first);
 	}
@@ -368,15 +268,15 @@ class Main extends Mod {
 
 	function keepFor(rarity:String):Bool {
 		if (rarity == "COMMON")
-			return settings.keepCommon;
+			return flagKeepCommon.value;
 		if (rarity == "UNCOMMON")
-			return settings.keepUncommon;
+			return flagKeepUncommon.value;
 		if (rarity == "RARE")
-			return settings.keepRare;
+			return flagKeepRare.value;
 		if (rarity == "LEGENDARY")
-			return settings.keepLegendary;
+			return flagKeepLegendary.value;
 		if (rarity == "CONSUMABLE_SMALL" || rarity == "CONSUMABLE_ROYAL")
-			return settings.keepItemBox;
+			return flagKeepItemBox.value;
 		// The summary only carries chests; keep anything unexpected rather than lose it.
 		return true;
 	}
@@ -417,7 +317,6 @@ class Main extends Mod {
 		paused = true;
 		pauseReason = reason;
 		Log.write("pause: " + reason);
-		Hub.notifyChanged();
 	}
 
 	/** A settings change is a good moment to retry after a pause (storage full, timeout). */
