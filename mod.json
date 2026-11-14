@@ -2,7 +2,7 @@
   "id": "summary_chest_rules",
   "name": "Summary Chest Rules",
   "description": "Keeps or discards the victory summary chests by rarity, automatically.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": "iClawSuit",
   "api": "1.3",
   "entry": "Main",

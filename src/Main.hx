@@ -78,7 +78,13 @@ class Main extends Mod {
 		sliderTimeout.onChange(function() { resume(); });
 
 		ctx.core.onObjectReady(function(object) {
-			if (Std.isOfType(object, DistributedDungeonSummary)) {
+			if (object == null)
+				return;
+			var className = "";
+			try {
+				className = Type.getClassName(Type.getClass(object));
+			} catch (error:Dynamic) {}
+			if (className == "distributedObjects.DistributedDungeonSummary") {
 				summary = cast object;
 				paused = false;
 				pauseReason = "";
@@ -143,6 +149,12 @@ class Main extends Mod {
 		if (now - traceAt > 1000) {
 			traceAt = now;
 			trace(now);
+		}
+		if (summary.mChestTransactionFailedPopup != null) {
+			// The server rejected the last transaction. Retrying it opens the same chest again and
+			// can leave the summary in a bad state, so stop and leave the chest for the player.
+			pause("transaction_failed");
+			return;
 		}
 		if (facade == null || paused)
 			return;
@@ -282,17 +294,41 @@ class Main extends Mod {
 	}
 
 	function keepChest(slot:Int, gmChest:Dynamic, rarity:String, count:Int, now:Float):Void {
+		var storage = facade.dbAccountInfo.inventoryInfo;
+		var oldLimit = storage.mStorageLimitWeapon;
+		var raised = false;
 		try {
+			var gmId = Std.int(Reflect.field(gmChest, "Id"));
+			if (!storage.hasRoomForChest(gmId)) {
+				if (Type.resolveClass("mods.full_inventory.Main") != null) {
+					// Full Inventory raises the client storage limit while its keep callbacks run.
+					// Apply the same allowance to this direct keep so it stays compatible.
+					storage.mStorageLimitWeapon = oldLimit + 10000;
+					raised = true;
+					Log.write("full inventory: raised storage limit for slot=" + slot);
+				} else {
+					// Let the game show its own storage-full popup instead of sending TakeChest and
+					// getting a transaction error. The player can free a slot or abandon the chest.
+					summary.mSelectedItemSlot = cast slot;
+					summary.mSelectedGMChest = cast gmChest;
+					summary.keepChestCallback();
+					cooldown = now + 900;
+					Log.write("storage full; native prompt slot=" + slot + " chest=" + gmId);
+					return;
+				}
+			}
 			summary.mSelectedGMChest = cast gmChest;
 			summary.keepChestFromInventory(cast slot, true);
 			keepSince = now;
 			keepCount = count;
 			cooldown = now + 900;
-			Log.write("keep slot=" + slot + " rarity=" + rarity + " chest=" + Std.int(Reflect.field(gmChest, "Id")));
+			Log.write("keep slot=" + slot + " rarity=" + rarity + " chest=" + gmId);
 		} catch (error:Dynamic) {
 			Log.write("keep failed: " + Std.string(error));
 			pause("keep_failed");
 		}
+		if (raised)
+			storage.mStorageLimitWeapon = oldLimit;
 	}
 
 	function drop(slot:Int, gmChest:Dynamic, rarity:String, now:Float):Void {
